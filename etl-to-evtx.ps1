@@ -1,153 +1,172 @@
-﻿write-host "`n...........................................`n"
-write-host "@ACALARCH Convert .ETL to WEF subscribable log"
-write-host '    Requires CSV in "C:\Windows\Temp\pathstopull.txt"' 
-write-host '    ......CSV Format Example......' 
-write-host "        C:\Windows\System32\winevt\Logs\Microsoft-Windows-WMI-Activity%4Trace.etl, CUST_WMITRACE"
-write-host '    ......END EXAMPLE......'
-write-host "...........................................`n"
-start-sleep -s 1
+﻿<#
+.Synopsis
+    Consume an Event Trace Log file (.etl) and convert it to Microsoft Event Viewer log file (.evtx), which can be read from the Event Viewer.
+.DESCRIPTION
+    This function loads an Event Trace Log file into memory, parses the file and exports each entry in the log to an Event Viewer log file.
 
-$logz = ""
+    If the specified Event Viewer Log File name does not exist, it is created at runtime. 
+    
+    Event Viewer Log file names need to be exceptionally unique. This is to say, Windows only looks at the first eight characters of event log names when determining uniqueness. 
+.EXAMPLE
+    PS> ConvertTo-EvtxLogFormat -EtlFilePath "C:\Windows\System32\winevt\Logs\Microsoft-Windows-DNSServer%4Analytical.etl" -EvtxLogName "DNSServer-Analytical"
 
-function load-etl {
-    try{
-    write-host "Attempting to read CSV at "C:\Windows\Temp\pathstopull.txt"" 
-    $filehash = get-filehash "C:\Windows\Temp\pathstopull.txt" -ErrorAction Stop
-    $filehash = $filehash.Hash
-    $b = import-csv "C:\Windows\Temp\pathstopull.txt" -header Path,Name -ErrorAction Stop 
-    }
-    catch 
-    {
-    write-host -foregroundcolor RED "Unable to load CSV at "C:\Windows\Temp\pathstopull.txt"" 
-    write-host -foregroundcolor RED "EXITING"
-    exit 
-    }
+    By default, this command produces no output. 
+.EXAMPLE
+    PS> ConvertTo-EvtxLogFormat -EtlFilePath "C:\Windows\System32\winevt\Logs\Microsoft-Windows-DNSServer%4Analytical.etl" -EvtxLogName "DNSServer-Analytical" -EvtxMaxLogSize 51200 -Verbose
 
-    $logz = @()
+    VERBOSE: Created a new Event Log: 'DNSServer-Analytical'.
+    VERBOSE: Applied the following logging limits on 'DNSServer-Analytical' || Size: 51200 | OverflowAction: OverwriteAsNeeded
+    VERBOSE: Imported 15964 log entries from: 'C:\Windows\System32\winevt\Logs\Microsoft-Windows-DNSServer%4Analytical.etl'.
+    VERBOSE: Added 15964 events to EventLog: 'DNSServer-Analytical'
 
+    This example demonstrates how to impose limits on the log file that gets created.
+    It also demonstrates that when the -Verbose flag is specified, descriptive verbose content is returned to the console.
+#>
+function ConvertTo-EvtxLogFormat {
+    [CmdletBinding()]
+    param(
+        #Specifies a path to an Event Trace Log File (.etl).
+        [String] $EtlFilePath,
 
-    write-host -foregroundcolor cyan "Attempting to load etl sources and preparing destination logs"
-    foreach($source in $b){
-        $alive = "ALIVE"
-        Try{
-             get-winevent -Oldest -Path $source.Path -ErrorAction Stop | out-null
-             Get-WinEvent -ListLog $source.Name -ErrorAction Stop | out-null
-        }
-        Catch
-        {
-        $pathexists = test-path $source.path
-        write-host checking if path to log exists
-            if(-Not $pathexists)
-            {
-                write-host -foregroundcolor RED "Following Log Does Not Exist or is Inaccessible, Logs Will Not Be Converted, Maybe Ensure The Log Is Enabled?:" $source.path
-                $alive = "DEAD"
+        #Specifies a name to give to the EVTX log file that gets created at runtime. 
+        #If a log file already exists, this parameter specifies that events imported from the .etl file should be written to the specified log file.
+        [String] $EvtxLogName,
+
+        #Specifies the maximum size of the .evtx file in kilobytes, as an integer.
+        #EvtxMaxLogSize must be between 64KB and 4GB, and the value must be evenly divisible by 64.
+        [ValidateScript({ $(($_ % 64) -eq 0) })]
+        [ValidateRange(65536, 4294967296)]
+        [Int] $EvtxMaxLogSize,
+
+        #Specifies the overflow action that should occur when the log reaches its maximum size.
+        #Possible options include overwriting the oldest events (OverwriteAsNeeded) or never overwriting (DoNotOverwrite).
+        [ValidateSet('OverwriteAsNeeded','DoNotOverwrite')]
+        [String] $EvtxLogOverflowAction = 'OverwriteAsNeeded'
+    )
+
+    begin {
+        function Import-EtlFile {
+            #Helper function to import an ETL file.
+            #Returns the contents of the ETL file.
+            [CmdletBinding()]
+            param(
+                #Specifies an event trace log (etl) file to import.
+                [ValidateScript({ $_ -match ".etl"})]
+                [String] $EtlFilePath
+            )
+
+            Begin {
+            
             }
-            else{
-            $exceptional = $_.Exception.Message.ToString()
-            if($exceptional -like 'There is not an event log on the localhost computer that matches*')
-            {
-             try{
-             new-eventlog -source $source.Name -logname $source.Name -erroraction Stop | out-null
-             write-host "created event:" $source.Name
-             }
-             catch
-             {
-             write-host unable to create log $source.Name, windows looks at only the first 8 chars for custom logs, so please ensure name does not conflict
-             write-host Logs Will Not Be Converted for: $source.Name
-             $alive = "DEAD"
-             }
-            }
-        }
-        }
 
-        $log = New-Object -TypeName PSObject
-        $log | Add-Member -Type NoteProperty -Name Path -Value $source.Path
-        $log | Add-Member -Type NoteProperty -Name Name -Value $source.Name
-        if($alive -eq "DEAD"){
-        $log | Add-Member -Type NoteProperty -Name Enabled -Value "false"
-        }
-        else{
-        $log | Add-Member -Type NoteProperty -Name Enabled -Value "true"
-        }
-        $log | Add-Member -Type NoteProperty -Name LastUpdate -Value "No new logs"
-
-        if($alive -eq "ALIVE"){
-        $logz += $log
-        }
-    }
-    $returns += $logz
-    $returns += $filehash
-    return $returns
-}
-
-$return = load-etl
-$logz = @()
-for($i=0; $i -lt ($return.Length - 1); $i++)
-{
-$logz += $return[$i]
-}
-$filehash = $return[$return.Length -1]
-
-
-foreach($log in $logz){
-    if($log.Enabled = "true"){
-    write-host "Loaded Source:" $log.Path
-    }
-}
-
-write-host "`n"
-
-$lastlogtime = "No new logs"
-
-
-$count = 0
-
-while($true){
-    if($count -eq 6){
-      $count = 0
-      write-host -foregroundcolor Gray "Checking for updates"
-      try{
-      $filehashnow = get-filehash "C:\Windows\Temp\pathstopull.txt" -erroraction STOP
-      $filehashnow = $filehashnow.Hash
-      }
-      catch{
-      $filehashnow = "NOPE"
-      }
-      if(($filehashnow -ne $filehash) -and ($filehashnow -ne "NOPE")){
-                $return = load-etl
-                $logz = @()
-                for($i=0; $i -lt ($return.Length - 1); $i++)
-                {
-                    $logz += $return[$i]
+            Process {
+                #Check for a valid path.
+                if (-not (Test-Path $EtlFilePath -ErrorAction SilentlyContinue)) {
+                    Write-Error "Cannot find the path '$EltFilePath' because it does not exist." -Category ObjectNotFound
+                    return
                 }
-                $filehash = $return[$return.Length -1]
+
+                #Get the events from the .etl file.
+                Try {
+                    #-Oldest parameter is required for .etl files.
+                    $etlEvents = Get-WinEvent -Path $EtlFilePath -Oldest -Verbose:$false -ErrorAction Stop 
+
+                    return $etlEvents
+                }
+                Catch {
+                    Write-Error "The specified .etl file '$EtlFilePath' could not be read."
+                }
             }
+
+            End {
+
+            }
+        }    
     }
-    $count = $count + 1
-    $a = get-date
-    write-host -foregroundcolor "cyan" "Checking Logs"
-    foreach($log in $logz){
-        write-host -foregroundcolor "green" "    Checking logs for:" $log.Path 
-        $mylogs = $null
-        if($log.LastUpdate -eq "No new logs")
-        {
-            $mylogs = get-winevent -Oldest -Path $log.Path | where-object {$_.TimeCreated -gt $a.AddMinutes(-1)}
-        }
-        else{
-            $mylogs = get-winevent -Oldest -Path $log.Path | where-object {$_.TimeCreated -gt $log.LastUpdate}
+
+    process {
+        #Create a new event log name/source.
+        if (-not (Get-WinEvent -ListLog $EvtxLogName -ErrorAction SilentlyContinue)) {
+            Try {
+                New-EventLog -Source $EvtxLogName -LogName $EvtxLogName -ErrorAction Stop
+                Write-Verbose "Created a new Event Log: '$EvtxLogName'."
+
+                #Set size/retention limits on the EventLog.
+                Try {
+                    Limit-EventLog -LogName $EvtxLogName -MaximumSize $EvtxMaxLogSize -OverflowAction $EvtxLogOverflowAction -ErrorAction Stop
+                    Write-Verbose "Applied the following logging limits on '$EvtxLogName' || Size: $EvtxMaxLogSize | OverflowAction: $EvtxLogOverflowAction"
+                }
+                Catch {
+                    Write-Error "Failed to set logging size/retention limits on event log: '$EvtxLogName'."
+                }
+            }
+            Catch {
+                Write-Error "Failed to create a new event log with log name: '$EvtxLogName'. Windows only looks at the first 8 charaters for custom log names. Ensure your log name is unique."
+                throw
+            }
         }
 
-        if($mylogs -is [system.array]){
-            $log.LastUpdate = $mylogs[$mylogs.Length - 1].TimeCreated
-            write-host "    ...Converted" $mylogs.Length "logs"
-            write-host "    ...Latest log was at:" $log.LastUpdate
-            $mylogs | foreach-object {$message = $_.Message + ";`n`nTime = " + $_.TimeCreated + "`nLevel = " + $_.Level + "`nMachineName = " + $_.MachineName + "`nProcessId = " + $_.ProcessId + "`nThreadId = " + $_.ThreadId + "`nUserId = " + $_.UserId + "`nCount = " + $count; Write-EventLog -LogName $log.Name -Source $log.Name -EventId $_.Id -Message $message}; $count = $count + 1; Start-Sleep -m 5
+        #Import all of the events from the ETL file. 
+        Try {
+            $etlEvents = Import-EtlFile -EtlFilePath $EtlFilePath -ErrorAction Stop
+            Write-Verbose "Imported $($etlEvents | Measure-Object | Select-Object -ExpandProperty Count) log entries from: '$EtlFilePath'."
         }
-        else{
-            write-host "    ...No new logs to convert"
-            write-host "    ...Latest log was at:" $log.LastUpdate
+        Catch {
+            throw
         }
+
+        #Get the last event in the EVTX event log. If the log is new, there are no events and an error is thrown.
+        Try {
+            $lastEventGenerated = 'N\A'
+            $lastEventGenerated = Get-EventLog -LogName $EvtxLogName -Newest 1 -ErrorAction Stop | 
+                Select-Object -ExpandProperty TimeGenerated
+
+            Write-Verbose "The last event written to '$EvtxLogName' occurred on: $lastEventGenerated."
+        }
+        Catch {
+            $lastEventGenerated = (Get-Date "01/01/1600 00:00:00")
+        }
+
+        #Loop over events that occurred AFTER the last generated event.
+        $eventsToProcess = $etlEvents | 
+            Where-Object TimeCreated -gt $lastEventGenerated
+
+        $counter = 0
+        if ($eventsToProcess) {
+            foreach ($event in $eventsToProcess) {
+                $counter++
+
+                $eventlogContents = @"
+$($event.Message)
+
+Event ID: $($event.Id)
+Event Provider: $($event.ProviderName)
+Event Time: $($event.TimeCreated)
+Event Level/LevelDisplayName: $($event.Level) / $($event.LevelDisplayName)
+Event ComputerName: $($event.MachineName)
+Event ProcessID: $($event.ProcessID)
+Event UserSID: $($event.UserID)
+Event ContainerLog: $($event.ContainerLog)
+"@
+                
+                $writeEventLogSplat = @{
+                    LogName = $EvtxLogName
+                    Source  = $EvtxLogName
+                    EventID = $event.Id
+                    Message = $eventlogContents
+                }
+
+                Write-EventLog @writeEventLogSplat
+            }
+
+            Write-Verbose "Added $counter events to EventLog: '$EvtxLogName'"
+        }
+        else {
+            Write-Verbose "There were no new events to process."
+        }        
     }
-    write-host -foregroundcolor "cyan" "Sleeping for 15 seconds`n"
-    start-sleep -s 15
+    
+    end {
+
+    }
 }
