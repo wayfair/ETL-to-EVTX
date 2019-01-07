@@ -12,10 +12,10 @@
 
     By default, this command produces no output. 
 .EXAMPLE
-    PS> ConvertTo-EvtxLogFormat -EtlFilePath "C:\Windows\System32\winevt\Logs\Microsoft-Windows-DNSServer%4Analytical.etl" -EvtxLogName "DNSServer-Analytical" -EvtxMaxLogSize 51200 -Verbose
+    PS> ConvertTo-EvtxLogFormat -EtlFilePath "C:\Windows\System32\winevt\Logs\Microsoft-Windows-DNSServer%4Analytical.etl" -EvtxLogName "DNSServer-Analytical" -EvtxMaxLogSize 536870912 -Verbose
 
     VERBOSE: Created a new Event Log: 'DNSServer-Analytical'.
-    VERBOSE: Applied the following logging limits on 'DNSServer-Analytical' || Size: 51200 | OverflowAction: OverwriteAsNeeded
+    VERBOSE: Applied the following logging limits on 'DNSServer-Analytical' || Size: 536870912 | OverflowAction: OverwriteAsNeeded
     VERBOSE: Imported 15964 log entries from: 'C:\Windows\System32\winevt\Logs\Microsoft-Windows-DNSServer%4Analytical.etl'.
     VERBOSE: Added 15964 events to EventLog: 'DNSServer-Analytical'
 
@@ -36,7 +36,7 @@ function ConvertTo-EvtxLogFormat {
         #EvtxMaxLogSize must be between 64KB and 4GB, and the value must be evenly divisible by 64.
         [ValidateScript({ $(($_ % 64) -eq 0) })]
         [ValidateRange(65536, 4294967296)]
-        [Int] $EvtxMaxLogSize,
+        [Int] $EvtxMaxLogSize = 536870912,
 
         #Specifies the overflow action that should occur when the log reaches its maximum size.
         #Possible options include overwriting the oldest events (OverwriteAsNeeded) or never overwriting (DoNotOverwrite).
